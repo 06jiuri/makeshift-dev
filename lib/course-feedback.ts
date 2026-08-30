@@ -125,12 +125,13 @@ async function resolveFeedbackViewer(args: ServiceArgs): Promise<Viewer | null> 
   if (!viewer) return null;
 
   const db = getDb(args.env);
-  const [hasCourseAccess, hasForumAccess] = await Promise.all([
-    hasActiveEntitlement(db, viewer.userId, CAPABILITY_SCOPES.course),
-    hasActiveEntitlement(db, viewer.userId, CAPABILITY_SCOPES.forum),
-  ]);
-  if (!hasCourseAccess || !hasForumAccess) return null;
-  return { ...viewer, hasForumAccess };
+  const hasCourseAccess = await hasActiveEntitlement(
+    db,
+    viewer.userId,
+    CAPABILITY_SCOPES.course,
+  );
+  if (!hasCourseAccess || !viewer.hasForumAccess) return null;
+  return viewer;
 }
 
 async function loadCourseMeta(db: Db, sectionSlug: string): Promise<CourseMeta | null> {
@@ -232,6 +233,11 @@ async function ensureDiscussionThread(
   db: Db,
   course: CourseMeta,
 ): Promise<DiscussionThread> {
+  // Course import keeps existing threads in sync. Feedback submission only
+  // needs to repair a missing/removed thread, not rewrite a healthy one.
+  const published = await loadExistingDiscussion(db, course.slug);
+  if (published) return published;
+
   const systemUserId = await loadSystemUserId(env, db);
   await ensureCourseDiscussionTag(db);
   const title = `课程讨论：${course.title}`;
@@ -493,11 +499,12 @@ async function loadHighlightedComments({
 export async function getCourseFeedbackSummary(
   args: ServiceArgs & { sectionSlug: string },
 ): Promise<CourseFeedbackSummary | null> {
-  const viewer = await resolveFeedbackViewer(args);
-  if (!viewer) return null;
-
   const db = getDb(args.env);
-  const course = await loadCourseMeta(db, args.sectionSlug);
+  const [viewer, course] = await Promise.all([
+    resolveFeedbackViewer(args),
+    loadCourseMeta(db, args.sectionSlug),
+  ]);
+  if (!viewer) return null;
   if (!course) return null;
 
   const [counts, viewerRow, discussion] = await Promise.all([

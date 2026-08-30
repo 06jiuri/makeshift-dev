@@ -28,6 +28,7 @@ import {
   getCourseDiscussionPostSlug,
   getCourseFeedbackSummary,
 } from "@/lib/course-feedback";
+import { observeServerOperation } from "@/lib/server-observability";
 
 export const dynamicParams = true;
 export const dynamic = "force-dynamic";
@@ -77,15 +78,35 @@ export default async function CoursePage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const { course, articles } = await getCourseContext(slug);
+  const [{ course, articles }, unlockedEntitlements] =
+    await observeServerOperation(
+      "course.page.bootstrap",
+      () => Promise.all([getCourseContext(slug), getViewerEntitlements()]),
+      { slowMs: 750 },
+    );
   if (!course) notFound();
 
-  const unlockedEntitlements = await getViewerEntitlements();
-  const body = await getCourseBody(course, slug);
-  const feedbackSummary = body ? await getFeedbackSummary(slug) : null;
+  const body = await observeServerOperation(
+    "course.page.body",
+    () => getCourseBody(course, slug),
+    { slowMs: 500 },
+  );
+  const feedbackSummary = body
+    ? await observeServerOperation(
+        "course.page.feedback",
+        () => getFeedbackSummary(slug),
+        { slowMs: 750 },
+      )
+    : null;
   const discussionPostSlug =
     feedbackSummary?.discussionPostSlug ??
-    (body ? await getDiscussionPostSlug(slug) : null);
+    (body
+      ? await observeServerOperation(
+          "course.page.discussion_fallback",
+          () => getDiscussionPostSlug(slug),
+          { slowMs: 500 },
+        )
+      : null);
 
   const { prev, next } = getAdjacentArticlesFromList(articles, slug);
 

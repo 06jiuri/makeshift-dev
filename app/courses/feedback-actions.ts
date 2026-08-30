@@ -9,6 +9,7 @@ import {
   type CourseFeedbackWriteResult,
 } from "@/lib/course-feedback";
 import type { FeedbackStatus } from "@/lib/course-feedback-types";
+import { observeServerOperation } from "@/lib/server-observability";
 
 export type CourseFeedbackFormState = {
   ok: boolean;
@@ -44,14 +45,19 @@ export async function submitCourseFeedbackAction(
   const sectionSlug = String(formData.get("sectionSlug") ?? "");
   let result: Awaited<ReturnType<typeof submitCourseFeedback>>;
   try {
-    result = await submitCourseFeedback({
-      ...(await serviceArgs()),
-      input: {
-        sectionSlug,
-        status: String(formData.get("status") ?? "") as FeedbackStatus,
-        bodyMd: String(formData.get("bodyMd") ?? ""),
-      },
-    });
+    result = await observeServerOperation(
+      "course.feedback.submit",
+      async () =>
+        submitCourseFeedback({
+          ...(await serviceArgs()),
+          input: {
+            sectionSlug,
+            status: String(formData.get("status") ?? "") as FeedbackStatus,
+            bodyMd: String(formData.get("bodyMd") ?? ""),
+          },
+        }),
+      { slowMs: 750 },
+    );
   } catch (error) {
     console.error("submitCourseFeedbackAction failed", error);
     return { ok: false, message: "反馈提交失败，刷新页面后再试一次。" };
@@ -77,10 +83,15 @@ export async function withdrawCourseFeedbackAction(args: {
 }): Promise<CourseFeedbackFormState> {
   let result: Awaited<ReturnType<typeof withdrawCourseFeedback>>;
   try {
-    result = await withdrawCourseFeedback({
-      ...(await serviceArgs()),
-      sectionSlug: args.sectionSlug,
-    });
+    result = await observeServerOperation(
+      "course.feedback.withdraw",
+      async () =>
+        withdrawCourseFeedback({
+          ...(await serviceArgs()),
+          sectionSlug: args.sectionSlug,
+        }),
+      { slowMs: 750 },
+    );
   } catch (error) {
     console.error("withdrawCourseFeedbackAction failed", error);
     return { ok: false, message: "反馈撤回失败，刷新页面后再试一次。" };

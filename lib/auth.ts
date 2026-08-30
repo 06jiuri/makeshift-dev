@@ -69,9 +69,10 @@ export function createAuth(env: CloudflareEnv) {
       },
     },
     rateLimit: {
-      enabled: true,
-      window: 60,
-      max: 100,
+      // The auth route owns persistent D1-backed limits. Better Auth's default
+      // in-memory, per-IP limiter is isolate-local and punishes shared mobile,
+      // campus, and office egress IPs unpredictably.
+      enabled: false,
     },
   });
 }

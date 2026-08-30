@@ -1,4 +1,4 @@
-// @ts-expect-error OpenNext generates this file before Wrangler deploys the worker.
+// @ts-ignore OpenNext generates this file before Wrangler deploys the worker.
 import openNextWorker from "./.open-next/worker.js";
 import { runDailyDigestForPreviousShanghaiDay } from "./lib/daily-digest";
 

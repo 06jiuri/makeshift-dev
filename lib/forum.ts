@@ -482,20 +482,17 @@ export async function resolveViewer(args: ServiceArgs): Promise<Viewer | null> {
   if (!session) return null;
 
   const db = getDb(args.env);
-  const [profile] = await db
-    .select({
-      displayName: profiles.displayName,
-      role: profiles.role,
-    })
-    .from(profiles)
-    .where(eq(profiles.userId, session.user.id))
-    .limit(1);
-
-  const hasForumAccess = await hasActiveEntitlement(
-    db,
-    session.user.id,
-    CAPABILITY_SCOPES.forum,
-  );
+  const [[profile], hasForumAccess] = await Promise.all([
+    db
+      .select({
+        displayName: profiles.displayName,
+        role: profiles.role,
+      })
+      .from(profiles)
+      .where(eq(profiles.userId, session.user.id))
+      .limit(1),
+    hasActiveEntitlement(db, session.user.id, CAPABILITY_SCOPES.forum),
+  ]);
 
   return {
     userId: session.user.id,
@@ -698,8 +695,10 @@ export async function listPosts(
     );
 
   const postIds = rows.map((row) => row.id);
-  const tagsByPost = await loadTagsForPosts(db, postIds);
-  const commentCounts = await loadPublishedCommentCounts(db, postIds);
+  const [tagsByPost, commentCounts] = await Promise.all([
+    loadTagsForPosts(db, postIds),
+    loadPublishedCommentCounts(db, postIds),
+  ]);
 
   const filteredRows = tag
     ? rows.filter((row) =>
@@ -766,32 +765,34 @@ export async function getThread(
 
   if (!row || !canSeeStatus(viewer, row.status, row.authorId)) return null;
 
-  const tagsByPost = await loadTagsForPosts(db, [row.id]);
-  const commentRows = await db
-    .select({
-      id: forumComments.id,
-      postId: forumComments.postId,
-      authorId: forumComments.authorId,
-      bodyMd: forumComments.bodyMd,
-      status: forumComments.status,
-      createdAt: forumComments.createdAt,
-      updatedAt: forumComments.updatedAt,
-      displayName: profiles.displayName,
-      qqNumber: profiles.qqNumber,
-    })
-    .from(forumComments)
-    .leftJoin(profiles, eq(forumComments.authorId, profiles.userId))
-    .where(eq(forumComments.postId, row.id))
-    .orderBy(asc(forumComments.createdAt));
+  const [tagsByPost, commentRows] = await Promise.all([
+    loadTagsForPosts(db, [row.id]),
+    db
+      .select({
+        id: forumComments.id,
+        postId: forumComments.postId,
+        authorId: forumComments.authorId,
+        bodyMd: forumComments.bodyMd,
+        status: forumComments.status,
+        createdAt: forumComments.createdAt,
+        updatedAt: forumComments.updatedAt,
+        displayName: profiles.displayName,
+        qqNumber: profiles.qqNumber,
+      })
+      .from(forumComments)
+      .leftJoin(profiles, eq(forumComments.authorId, profiles.userId))
+      .where(eq(forumComments.postId, row.id))
+      .orderBy(asc(forumComments.createdAt)),
+  ]);
 
   const commentIds = commentRows.map((comment) => comment.id);
-  const voteCounts = await loadVoteCounts(db, commentIds);
-  const viewerVotes = await loadViewerVotes(db, commentIds, viewer.userId);
-  const postFollowed = await isPostFollowed(db, row.id, viewer.userId);
-  const feedbackRows =
+  const [voteCounts, viewerVotes, postFollowed, feedbackRows] = await Promise.all([
+    loadVoteCounts(db, commentIds),
+    loadViewerVotes(db, commentIds, viewer.userId),
+    isPostFollowed(db, row.id, viewer.userId),
     commentIds.length === 0
-      ? []
-      : await db
+      ? Promise.resolve([])
+      : db
           .select({
             forumCommentId: courseFeedback.forumCommentId,
             status: courseFeedback.status,
@@ -799,7 +800,8 @@ export async function getThread(
             userId: courseFeedback.userId,
           })
           .from(courseFeedback)
-          .where(inArray(courseFeedback.forumCommentId, commentIds));
+          .where(inArray(courseFeedback.forumCommentId, commentIds)),
+  ]);
   const feedbackByComment = new Map(
     feedbackRows
       .filter((feedback) => feedback.forumCommentId)

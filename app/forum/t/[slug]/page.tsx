@@ -18,6 +18,7 @@ import { PostBodyEditable } from "@/components/forum/post-body-editable";
 import { CommentItem } from "@/components/forum/comment-item";
 import { CommentComposer } from "@/components/forum/comment-composer";
 import { FollowPostButton } from "@/components/forum/follow-post-button";
+import { observeServerOperation } from "@/lib/server-observability";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +29,11 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { slug } = await params;
   const { env } = await getCloudflareContext({ async: true });
-  const thread = await getThread({ env, requestHeaders: await headers(), slug });
+  const thread = await observeServerOperation(
+    "forum.thread.metadata",
+    async () => getThread({ env, requestHeaders: await headers(), slug }),
+    { slowMs: 750 },
+  );
   return { title: thread?.post.title ?? "帖子" };
 }
 
@@ -51,13 +56,25 @@ export default async function ThreadPage({
   const requestHeaders = await headers();
 
   // 先用 resolveViewer 决定 Gate：无权限一律 Gate，不区分帖子是否存在，避免探测。
-  const viewer = await resolveViewer({ env, requestHeaders });
+  const viewer = await observeServerOperation(
+    "forum.thread.viewer",
+    () => resolveViewer({ env, requestHeaders }),
+    { slowMs: 500 },
+  );
   if (!viewer?.hasForumAccess) return <ForumGate />;
 
-  const thread = await getThread({ env, requestHeaders, slug });
+  const thread = await observeServerOperation(
+    "forum.thread.content",
+    () => getThread({ env, viewer, slug }),
+    { slowMs: 750 },
+  );
   if (!thread) notFound();
 
-  const allTags = await listTags({ env });
+  const allTags = await observeServerOperation(
+    "forum.thread.tags",
+    () => listTags({ env }),
+    { slowMs: 300 },
+  );
   const { post, comments } = thread;
   const published = post.status === "published";
   const publishedComments = comments.filter((c) => c.status === "published");

@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { listPosts, listTags } from "@/lib/forum";
+import { observeServerOperation } from "@/lib/server-observability";
 import { ForumGate } from "@/components/forum/forum-gate";
 import { ForumListView } from "@/components/forum/forum-list-view";
 
@@ -19,11 +20,17 @@ export default async function ForumPage({
   const { cursor, view } = await searchParams;
   const moderation = view === "moderation";
 
-  const page = await listPosts({ env, requestHeaders, cursor, moderation });
+  const [page, tags] = await observeServerOperation(
+    "forum.list.bootstrap",
+    () =>
+      Promise.all([
+        listPosts({ env, requestHeaders, cursor, moderation }),
+        listTags({ env }),
+      ]),
+    { fields: { moderation }, slowMs: 750 },
+  );
   if (!page) return <ForumGate />;
   if (moderation && page.viewer.role !== "admin") notFound();
-
-  const tags = await listTags({ env });
 
   return (
     <ForumListView

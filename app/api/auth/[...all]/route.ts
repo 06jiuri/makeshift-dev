@@ -1,9 +1,16 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { createAuth } from "@/lib/auth";
+import {
+  authLimitRules,
+  authPathGroup,
+  normalizeAuthEmail,
+} from "@/lib/auth-rate-limit-policy";
 import { getClientIp, requireRateLimit } from "@/lib/rate-limit";
+import { observeServerOperation } from "@/lib/server-observability";
 
-async function authHandler(request: Request) {
-  const { env } = await getCloudflareContext({ async: true });
+async function authHandler(request: Request, providedEnv?: CloudflareEnv) {
+  const env =
+    providedEnv ?? (await getCloudflareContext({ async: true })).env;
   return createAuth(env).handler(request);
 }
 
@@ -12,47 +19,72 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const { env } = await getCloudflareContext({ async: true });
-  const url = new URL(request.url);
-  const path = url.pathname.toLowerCase();
-  const ip = getClientIp(request);
-
-  const genericLimit = await requireRateLimit({
-    env,
-    namespace: "auth:post:ip",
-    key: ip,
-    limit: 120,
-    windowMs: 60_000,
-  });
-  if (genericLimit) return genericLimit;
-
-  const strict = authStrictLimit(path);
-  if (strict) {
-    const response = await requireRateLimit({
-      env,
-      namespace: strict.namespace,
-      key: ip,
-      limit: strict.limit,
-      windowMs: strict.windowMs,
-    });
-    if (response) return response;
-  }
-
-  return authHandler(request);
+  const path = new URL(request.url).pathname.toLowerCase();
+  return observeServerOperation(
+    "auth.post",
+    () => handlePost(request, path),
+    { fields: { path: authPathGroup(path) }, slowMs: 1_000 },
+  );
 }
 
-function authStrictLimit(path: string) {
-  if (path.includes("/sign-in/email")) {
-    return { namespace: "auth:signin:ip", limit: 12, windowMs: 5 * 60_000 };
+async function handlePost(request: Request, path: string) {
+  const { env } = await getCloudflareContext({ async: true });
+  const ip = getClientIp(request);
+
+  const email = await readRequestEmail(request);
+  const rules = authLimitRules(path, ip, email);
+  const results = await observeServerOperation(
+    "auth.rate_limit",
+    () =>
+      Promise.all(
+        rules.map((rule) =>
+          requireRateLimit({
+            env,
+            namespace: rule.namespace,
+            key: rule.key,
+            limit: rule.limit,
+            windowMs: rule.windowMs,
+          }),
+        ),
+      ),
+    { fields: { path: authPathGroup(path) }, slowMs: 300 },
+  );
+  const blockedIndex = results.findIndex((result) => result !== null);
+  if (blockedIndex >= 0) {
+    const rule = rules[blockedIndex];
+    console.warn(
+      JSON.stringify({
+        event: "auth_rate_limited",
+        source: "app",
+        path: authPathGroup(path),
+        dimension: rule.dimension,
+        namespace: rule.namespace,
+      }),
+    );
+    return results[blockedIndex]!;
   }
-  if (path.includes("/sign-up/email")) {
-    return { namespace: "auth:signup:ip", limit: 6, windowMs: 60 * 60_000 };
+
+  const response = await observeServerOperation(
+    "auth.better_auth",
+    () => authHandler(request, env),
+    { fields: { path: authPathGroup(path) }, slowMs: 750 },
+  );
+  if (response.status === 429) {
+    console.warn(
+      JSON.stringify({
+        event: "auth_rate_limited",
+        source: "better-auth",
+        path: authPathGroup(path),
+      }),
+    );
   }
-  if (path.includes("/email-otp/")) {
-    return { namespace: "auth:email-otp:ip", limit: 10, windowMs: 10 * 60_000 };
-  }
-  if (path.includes("/reset-password") || path.includes("/forget-password")) {
-    return { namespace: "auth:password-reset:ip", limit: 8, windowMs: 15 * 60_000 };
-  }
-  return null;
+  return response;
+}
+
+async function readRequestEmail(request: Request): Promise<string | null> {
+  const body = await request
+    .clone()
+    .json()
+    .catch(() => null);
+  return normalizeAuthEmail(body);
 }
