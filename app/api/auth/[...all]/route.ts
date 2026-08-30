@@ -5,7 +5,7 @@ import {
   authPathGroup,
   normalizeAuthEmail,
 } from "@/lib/auth-rate-limit-policy";
-import { getClientIp, requireRateLimit } from "@/lib/rate-limit";
+import { getClientIp, requireRateLimits } from "@/lib/rate-limit";
 import { observeServerOperation } from "@/lib/server-observability";
 
 async function authHandler(request: Request, providedEnv?: CloudflareEnv) {
@@ -36,16 +36,14 @@ async function handlePost(request: Request, path: string) {
   const results = await observeServerOperation(
     "auth.rate_limit",
     () =>
-      Promise.all(
-        rules.map((rule) =>
-          requireRateLimit({
-            env,
-            namespace: rule.namespace,
-            key: rule.key,
-            limit: rule.limit,
-            windowMs: rule.windowMs,
-          }),
-        ),
+      requireRateLimits(
+        rules.map((rule) => ({
+          env,
+          namespace: rule.namespace,
+          key: rule.key,
+          limit: rule.limit,
+          windowMs: rule.windowMs,
+        })),
       ),
     { fields: { path: authPathGroup(path) }, slowMs: 300 },
   );
