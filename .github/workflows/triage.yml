@@ -1,0 +1,61 @@
+name: Triage new work
+
+on:
+  issues:
+    types: [opened, reopened]
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  label:
+    name: Apply triage labels
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label issue or pull request
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const labels = new Set(["needs-triage"]);
+
+            if (context.eventName === "pull_request_target") {
+              const externalAssociations = new Set([
+                "NONE",
+                "FIRST_TIMER",
+                "FIRST_TIME_CONTRIBUTOR",
+                "CONTRIBUTOR",
+              ]);
+              const pullRequest = context.payload.pull_request;
+
+              if (
+                pullRequest.user.type !== "Bot" &&
+                externalAssociations.has(pullRequest.author_association)
+              ) {
+                labels.add("area:student-pr");
+              }
+
+              const files = await github.paginate(
+                github.rest.pulls.listFiles,
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.issue.number,
+                  per_page: 100,
+                },
+              );
+
+              if (files.some((file) => file.filename === "data/students.json")) {
+                labels.add("area:student-pr");
+              }
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: [...labels],
+            });

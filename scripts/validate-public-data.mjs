@@ -79,9 +79,13 @@ if (quotes !== invalidJson && requireArray(quotes, "data/quotes.json")) {
       value.text.length > 500
     ) {
       errors.push(`${path}.text: expected 1-500 characters`);
+    } else if (value.text !== value.text.trim()) {
+      errors.push(`${path}.text: remove leading or trailing whitespace`);
     }
     if (typeof value.source !== "string" || value.source.length > 100) {
       errors.push(`${path}.source: expected a string up to 100 characters`);
+    } else if (value.source !== value.source.trim()) {
+      errors.push(`${path}.source: remove leading or trailing whitespace`);
     }
     if (typeof value.text === "string") {
       const normalized = value.text.trim();
